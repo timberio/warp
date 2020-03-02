@@ -186,9 +186,8 @@ where
     ) -> impl Future<Item = (), Error = ()> + 'static {
         let addr = addr.into();
         let result = try_bind!(self, &addr).map_err(|e| error!("error binding to {}: {}", addr, e));
-        futures::future::result(result).and_then(|(_, srv)| {
-            srv.map_err(|e| error!("server error: {}", e))
-        })
+        futures::future::result(result)
+            .and_then(|(_, srv)| srv.map_err(|e| error!("server error: {}", e)))
     }
 
     /// Bind to a possibly ephemeral socket address.
@@ -217,7 +216,8 @@ where
     pub fn try_bind_ephemeral(
         self,
         addr: impl Into<SocketAddr> + 'static,
-    ) -> Result<(SocketAddr, impl Future<Item = (), Error = ()> + 'static), hyper::error::Error> {
+    ) -> Result<(SocketAddr, impl Future<Item = (), Error = ()> + 'static), hyper::error::Error>
+    {
         let addr = addr.into();
         let (addr, srv) = try_bind!(self, &addr)?;
         Ok((addr, srv.map_err(|e| error!("server error: {}", e))))
@@ -281,6 +281,26 @@ where
     {
         let incoming = incoming.map(::transport::LiftIo);
         self.serve_incoming2(incoming)
+    }
+
+    /// dox
+    pub fn serve_incoming_with_graceful_shutdown<I>(
+        self,
+        incoming: I,
+        signal: impl Future<Item = (), Error = ()> + 'static,
+    ) -> impl Future<Item = (), Error = ()> + 'static
+    where
+        I: Stream + Send + 'static,
+        I::Item: AsyncRead + AsyncWrite + Send + 'static,
+        I::Error: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        let incoming = incoming.map(::transport::LiftIo);
+        let service = into_service!(self.service);
+        HyperServer::builder(incoming)
+            .http1_pipeline_flush(self.pipeline)
+            .serve(service)
+            .with_graceful_shutdown(signal)
+            .map_err(|e| error!("server error: {}", e))
     }
 
     fn serve_incoming2<I>(self, incoming: I) -> impl Future<Item = (), Error = ()> + 'static
